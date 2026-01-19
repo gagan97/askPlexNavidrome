@@ -1,6 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
+      "invocationName": "gags sonic",
       "intents": [
         {
           "name": "AMAZON.CancelIntent",
@@ -176,6 +177,41 @@
           "samples": [
             "قائمة التشغيل {playlist}",
             "شغل قائمة التشغيل {playlist}"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "song",
+              "type": "AMAZON.MusicRecording"
+            }
+          ],
+          "name": "PlaySong",
+          "samples": [
+            "Play {song}",
+            "Play the song {song}",
+            "Play song {song}",
+            "Put on {song}",
+            "I want to hear {song}",
+            "Can you play {song}"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "playlist",
+              "type": "playlist_names"
+            }
+          ],
+          "name": "ShufflePlaylist",
+          "samples": [
+            "shuffle the {playlist} playlist",
+            "shuffle playlist {playlist}",
+            "shuffle {playlist} playlist",
+            "shuffle and play the {playlist} playlist",
+            "shuffle and play {playlist} playlist",
+            "play {playlist} playlist shuffled",
+            "play the {playlist} playlist on shuffle"
           ]
         },
         {

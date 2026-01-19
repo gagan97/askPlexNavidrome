@@ -1,6 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
+      "invocationName": "gags sonic",
       "intents": [
         {
           "name": "AMAZON.CancelIntent",
@@ -92,16 +93,47 @@
         {
           "slots": [
             {
+              "name": "song",
+              "type": "AMAZON.MusicRecording"
+            }
+          ],
+          "name": "PlaySong",
+          "samples": [
+            "Play {song}",
+            "Play the song {song}",
+            "Play song {song}",
+            "Put on {song}",
+            "I want to hear {song}",
+            "Can you play {song}"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "playlist",
+              "type": "playlist_names"
+            }
+          ],
+          "name": "ShufflePlaylist",
+          "samples": [
+            "shuffle the {playlist} playlist",
+            "shuffle playlist {playlist}",
+            "shuffle {playlist} playlist",
+            "shuffle and play the {playlist} playlist",
+            "shuffle and play {playlist} playlist",
+            "play {playlist} playlist shuffled",
+            "play the {playlist} playlist on shuffle"
+          ]
+        },
+        {
+          "slots": [
+            {
               "name": "artist",
               "type": "AMAZON.Artist"
             }
           ],
           "name": "PlayMusicByArtist",
           "samples": [
-            "toca {artist}",
-            "toca o artista {artist}",
-            "toca o cantor {artist}",
-            "toca a banda {artist}",
             "toca músicas do artista {artist}",
             "toca músicas do cantor {artist}",
             "toca músicas da banda {artist}",
