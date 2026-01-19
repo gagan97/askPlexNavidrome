@@ -1,6 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
+      "invocationName": "gags sonic",
       "intents": [
         {
           "name": "AMAZON.CancelIntent",
@@ -87,16 +88,40 @@
         {
           "slots": [
             {
+              "name": "song",
+              "type": "AMAZON.MusicRecording"
+            }
+          ],
+          "name": "PlaySong",
+          "samples": [
+            "曲 {song} を再生して",
+            "{song} を再生して",
+            "{song} をかけてください"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "playlist",
+              "type": "playlist_names"
+            }
+          ],
+          "name": "ShufflePlaylist",
+          "samples": [
+            "{playlist} をシャッフルして再生して",
+            "{playlist} をシャッフルして",
+            "{playlist} をシャッフル再生して"
+          ]
+        },
+        {
+          "slots": [
+            {
               "name": "artist",
               "type": "AMAZON.Artist"
             }
           ],
           "name": "PlayMusicByArtist",
           "samples": [
-            "{artist}を再生して",
-            "{artist}の音楽を再生して",
-            "{artist}のバンドの音楽を再生して",
-            "{artist}の曲を再生して",
             "{artist}のバンドの歌を再生して",
             "{artist}の歌を再生して"
           ]

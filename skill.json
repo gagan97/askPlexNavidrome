@@ -18,27 +18,110 @@
       "distributionCountries": [],
       "isAvailableWorldwide": true,
       "locales": {
+        "ar-SA": {
+          "description": "AskPlex allows playing music hosted on your Plex or Navidrome server",
+          "examplePhrases": ["Alexa افتح AskPlex","Alexa اطلب من AskPlex تشغيل أغنية"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Play music from your media server"
+        },
+        "en-AU": {
+          "description": "AskPlex allows playing music hosted on your Plex or Navidrome server",
+          "examplePhrases": ["Alexa open askPlex","Alexa ask AskPlex to play music"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Play music from your media server"
+        },
+        "en-CA": {
+          "description": "AskPlex allows playing music hosted on your Plex or Navidrome server",
+          "examplePhrases": ["Alexa open askPlex","Alexa ask AskPlex to play music"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Play music from your media server"
+        },
+        "en-IN": {
+          "description": "AskPlex allows playing music hosted on your Plex or Navidrome server",
+          "examplePhrases": ["Alexa open askPlex","Alexa ask AskPlex to play music"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Play music from your media server"
+        },
+        "en-GB": {
+          "description": "AskPlex allows playing music hosted on your Plex or Navidrome server",
+          "examplePhrases": ["Alexa open askPlex","Alexa ask AskPlex to play music"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Play music from your media server"
+        },
         "en-US": {
           "description": "AskPlex is an Alexa skill which allows you to play music hosted by your plex media server",
-          "examplePhrases": [
-            "Alexa open askPlex",
-            "Alexa ask AskPlex to play some music",
-            "Alexa ask AskPlex to play rock music"
-          ],
+          "examplePhrases": ["Alexa open askPlex","Alexa ask AskPlex to play some music","Alexa ask AskPlex to play rock music"],
           "keywords": [],
           "name": "AskPlex",
           "summary": "Skill for playing music from your media server"
         },
+        "es-ES": {
+          "description": "AskPlex permite reproducir música almacenada en tu servidor Plex o Navidrome",
+          "examplePhrases": ["Alexa abre askPlex","Alexa pide a AskPlex pon música"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Reproduce música desde tu servidor"
+        },
+        "es-MX": {
+          "description": "AskPlex permite reproducir música almacenada en tu servidor Plex o Navidrome",
+          "examplePhrases": ["Alexa abre askPlex","Alexa pide a AskPlex pon música"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Reproduce música desde tu servidor"
+        },
         "es-US": {
           "description": "AskPlex es una skill de alexa que permite reproducir música almacenada en tu servidor de medios plex",
-          "examplePhrases": [
-            "Alexa abre askPlex",
-            "Alexa pide a AskPlex pon música",
-            "Alexa pide a AskPlex pon música rock"
-          ],
+          "examplePhrases": ["Alexa abre askPlex","Alexa pide a AskPlex pon música","Alexa pide a AskPlex pon música rock"],
           "keywords": [],
           "name": "AskPlex",
           "summary": "Sample Short Description"
+        },
+        "fr-CA": {
+          "description": "AskPlex vous permet de lire la musique hébergée sur votre serveur Plex ou Navidrome",
+          "examplePhrases": ["Alexa ouvre AskPlex","Alexa demande à AskPlex de jouer de la musique"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Lire la musique depuis votre serveur"
+        },
+        "fr-FR": {
+          "description": "AskPlex vous permet de lire la musique hébergée sur votre serveur Plex ou Navidrome",
+          "examplePhrases": ["Alexa ouvre AskPlex","Alexa demande à AskPlex de jouer de la musique"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Lire la musique depuis votre serveur"
+        },
+        "hi-IN": {
+          "description": "AskPlex allows playing music hosted on your Plex or Navidrome server",
+          "examplePhrases": ["Alexa open askPlex","Alexa ask AskPlex to play music"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Play music from your media server"
+        },
+        "it-IT": {
+          "description": "AskPlex consente di riprodurre la musica ospitata sul tuo server Plex o Navidrome",
+          "examplePhrases": ["Alexa apri AskPlex","Alexa chiedi ad AskPlex di riprodurre musica"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Riproduci musica dal tuo server"
+        },
+        "nl-NL": {
+          "description": "AskPlex speelt muziek van je Plex- of Navidrome-server af",
+          "examplePhrases": ["Alexa open AskPlex","Alexa vraag AskPlex muziek af te spelen"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Speel muziek vanaf je mediaserver"
+        },
+        "pt-BR": {
+          "description": "AskPlex permite tocar músicas hospedadas no seu servidor Plex ou Navidrome",
+          "examplePhrases": ["Alexa abra AskPlex","Alexa peça para o AskPlex tocar música"],
+          "keywords": [],
+          "name": "AskPlex",
+          "summary": "Reproduza música do seu servidor"
         }
       }
     }
