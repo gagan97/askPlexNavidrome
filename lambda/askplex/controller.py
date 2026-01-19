@@ -1198,7 +1198,10 @@ class Controller:
                     
                     # Build song list from album
                     connection = self.media_service.get_connection_for_source(source)
-                    song_list = connection.build_song_list_from_albums([album_id], config.PMS_DEFAULT_MAX_RESULTS, source) if hasattr(connection, 'build_song_list_from_albums') else []
+                    if hasattr(connection, 'build_song_list_from_albums'):
+                        song_list = connection.build_song_list_from_albums([album_id], config.PMS_DEFAULT_MAX_RESULTS)
+                    else:
+                        song_list = []
                     
                     if song_list:
                         # Clear both queues
