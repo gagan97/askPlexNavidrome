@@ -702,6 +702,43 @@ class PlayPlaylistHandler(AbstractRequestHandler):
         return player_controller.play_playlist()
 
 
+class PlaySongHandler(AbstractRequestHandler):
+    """
+    Handler for the 'PlaySong' intent.
+    Returns:
+        Response: The response object containing the result of the playback action.
+    """
+
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return is_intent_name('PlaySong')(handler_input)
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        logger.debug('In PlaySongHandler()')
+        player_controller = controller.Controller(logger, handler_input)
+        return player_controller.play_song()
+
+
+
+class ShufflePlaylistHandler(AbstractRequestHandler):
+    """
+    Handler for the 'ShufflePlaylist' intent.
+    Returns:
+        Response: The response object containing the result of the playback action.
+    """
+
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return is_intent_name('ShufflePlaylist')(handler_input)
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        logger.debug('In ShufflePlaylistHandler()')
+        player_controller = controller.Controller(logger, handler_input)
+        return player_controller.shuffle_playlist()
+
+
 class PlaySongFromAlbumHandler(AbstractRequestHandler):
     """
     Handler for the 'PlaySongFromAlbum' intent.
@@ -993,6 +1030,8 @@ sb.add_request_handler(PlayAlbumByArtistHandler())
 sb.add_request_handler(PlaySongByArtistHandler())
 sb.add_request_handler(PlayMusicByGenreHandler())
 sb.add_request_handler(PlayPlaylistHandler())
+sb.add_request_handler(PlayPlaySongHandler())
+sb.add_request_handler(ShufflePlaylistHandler())
 sb.add_request_handler(PlaySongFromAlbumHandler())
 sb.add_request_handler(PlayFavouriteSongsHandler())
 sb.add_request_handler(RepeatOnHandler())
