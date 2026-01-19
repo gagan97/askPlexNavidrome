@@ -1443,6 +1443,196 @@ class Controller:
         self.logger.info(speak_output)
         return self.start_playback()
 
+    def shuffle_playlist(self) -> Response:
+        """
+        Shuffle and play a playlist by name. Uses MediaService when available,
+        falls back to Plex implementation otherwise.
+        """
+        self.logger.debug('In shuffle_playlist()')
+
+        # get localization data
+        data = self.handler_input.attributes_manager.request_attributes["_"]
+
+        # Get playlist slot
+        playlist = get_slot_value_v2(self.handler_input, 'playlist')
+        if playlist is None:
+            speak_output = data[prompts.SKILL_INTENT_SLOTS_MISSING]
+            self.logger.error(speak_output)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        # Try MediaService first
+        try:
+            playlist_result = self.media_service.search_playlist(playlist.value)
+            if playlist_result:
+                playlist_id, source = playlist_result
+                song_list = self.media_service.build_song_list_from_playlist(playlist_id, source)
+                if not song_list or len(song_list) == 0:
+                    speak_output = sanitise_speech_output(f"The playlist {playlist.value} appears to be empty.")
+                    self.logger.error(speak_output)
+                    return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+                # Shuffle the song list
+                random.shuffle(song_list)
+
+                # Clear both queues
+                self.clear_playlist()
+                self.media_queue.clear()
+
+                # Enqueue songs using MediaService connection
+                connection = self.media_service.get_connection_for_source(source)
+                enqueue_songs(connection, self.media_queue, song_list, source)
+
+                playlist_name = data[prompts.PMS_PLNAME_PLAYLIST].format(playlist.value)
+                self.set_playlist_name(playlist_name)
+                speak_output = sanitise_speech_output(f"Shuffling and playing playlist {playlist.value}")
+
+                # Get first track and start playback
+                first_track = self.media_queue.get_next_track()
+                if first_track.id:
+                    self.handler_input.response_builder.speak(speak_output)
+                    self.logger.info(speak_output)
+                    directive = PlayDirective(
+                        play_behavior=PlayBehavior.REPLACE_ALL,
+                        audio_item=self.track_to_audio_item(first_track, 0, None)
+                    )
+                    self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                    return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to Plex implementation
+        response = self.load_music_section()
+        if response is not None:
+            return response
+
+        # Search playlist via Plex
+        try:
+            plex_track_list = self.section.playlist(title=playlist.value)
+        except NotFound as exception:
+            speak_output = data[prompts.PMS_PLAYLIST_SEARCH_EMPTY].format(playlist.value)
+            self.logger.error(exception)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+        except Exception as exception:
+            speak_output = data[prompts.PMS_PLAYLIST_SEARCH_ERROR].format(playlist.value)
+            self.logger.error(exception)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        if not plex_track_list or len(plex_track_list) == 0:
+            speak_output = sanitise_speech_output(f"The playlist {playlist.value} appears to be empty.")
+            self.logger.error(speak_output)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        # Shuffle plex tracks
+        random.shuffle(plex_track_list)
+
+        # Clear queues and add shuffled tracks
+        self.clear_playlist()
+        self.add_plex_tracks(plex_track_list)
+
+        playlist_name = data[prompts.PMS_PLNAME_PLAYLIST].format(playlist.value)
+        self.set_playlist_name(playlist_name)
+        speak_output = sanitise_speech_output(f"Shuffling and playing playlist {playlist.value}")
+
+        self.handler_input.response_builder.speak(speak_output)
+        self.logger.info(speak_output)
+        return self.start_playback()
+
+    def play_song (self) -> Response:
+        """
+        Play a song by title across available sources.
+        Searches for the song using MediaService first, falls back to Plex if needed.
+        Clears the current playlist, enqueues found tracks and starts playback.
+        """
+
+        self.logger.debug('In play_song()')
+
+        # get localization data
+        data = self.handler_input.attributes_manager.request_attributes["_"]
+
+        # Get variable(s) from intent
+        song = get_slot_value_v2(self.handler_input, 'song')
+        if song is None:
+            speak_output = data[prompts.SKILL_INTENT_SLOTS_MISSING]
+            self.logger.error(speak_output)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        # Try using MediaService first
+        try:
+            song_results = self.media_service.search_song(song.value)
+            if song_results and len(song_results) > 0:
+                # Use the best match (first result)
+                best_match = song_results[0]
+                source = best_match.get('source', 'plex')
+
+                # Build list of song IDs (limit by config)
+                max_results = min(len(song_results), config.PMS_DEFAULT_MAX_RESULTS)
+                song_id_list = [s.get('id') for s in song_results[:max_results]]
+
+                # Clear both queues
+                self.clear_playlist()
+                self.media_queue.clear()
+
+                # Enqueue songs from selected source
+                connection = self.media_service.get_connection_for_source(source)
+                enqueue_songs(connection, self.media_queue, song_id_list, source)
+
+                # Build playlist name and speak
+                artist_name = best_match.get('artist', '')
+                playlist_name = data[prompts.PMS_PLNAME_SONG].format(song=song.value, artist=artist_name)
+                self.set_playlist_name(playlist_name)
+                speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+
+                # Get first track and start playback
+                first_track = self.media_queue.get_next_track()
+                if first_track.id:
+                    self.handler_input.response_builder.speak(speak_output)
+                    self.logger.info(speak_output)
+
+                    directive = PlayDirective(
+                        play_behavior=PlayBehavior.REPLACE_ALL,
+                        audio_item=self.track_to_audio_item(first_track, 0, None)
+                    )
+                    self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                    return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to original Plex implementation
+        response = self.load_music_section()
+        if response is not None:
+            return response
+
+        # Search for the song on Plex
+        try:
+            plex_track_list = self.section.searchTracks(title=song.value)
+        except Exception as exception:
+            speak_output = data[prompts.PMS_SONG_SEARCH_ERROR].format(song=song.value, artist='')
+            self.logger.error(exception)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        if not plex_track_list or len(plex_track_list) == 0:
+            speak_output = data[prompts.PMS_SONG_SEARCH_EMPTY].format(song=song.value)
+            self.logger.error(speak_output)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        # Enqueue Plex results
+        self.clear_playlist()
+        self.add_plex_tracks(plex_track_list)
+
+        # Build playlist name using first track's artist if possible
+        try:
+            artist_name = plex_track_list[0].grandparentTitle if hasattr(plex_track_list[0], 'grandparentTitle') else ''
+        except Exception:
+            artist_name = ''
+
+        playlist_name = data[prompts.PMS_PLNAME_SONG].format(song=song.value, artist=artist_name)
+        self.set_playlist_name(playlist_name)
+        speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+
+        self.handler_input.response_builder.speak(speak_output)
+        self.logger.info(speak_output)
+        return self.start_playback()
+
 
     def play_song_from_album (self) -> Response:
         """
