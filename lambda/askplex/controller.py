@@ -10,12 +10,109 @@ from ask_sdk_model.interfaces import display
 from ask_sdk_core.handler_input import HandlerInput
 from ask_sdk_core.utils import get_slot_value_v2
 
-from plexapi.audio import Track
+from plexapi.audio import Track as PlexTrack
 from plexapi.server import PlexServer
 from plexapi.exceptions import NotFound
 
 from . import config
 from . import prompts
+from .track import Track
+from .media_queue import MediaQueue
+from .media_service import MediaService
+from .plex_api import PlexConnection
+from .subsonic_api import SubsonicConnection
+
+# Default fallback image URL
+DEFAULT_ART_URL = 'https://github.com/navidrome/navidrome/raw/master/resources/logo-192x192.png'
+
+#
+# Helper Functions
+#
+
+def build_metadata_from_track(track: Track) -> AudioItemMetadata:
+    """Build AudioItemMetadata from Track object
+    
+    :param Track track: A Track object with cover art URLs
+    :return: An Amazon AudioItemMetadata object
+    :rtype: AudioItemMetadata
+    """
+    
+    art_url = track.cover_art_url or DEFAULT_ART_URL
+    background_url = track.background_url or DEFAULT_ART_URL
+    title = track.title or 'Unknown Track'
+    artist = track.artist or 'Unknown Artist'
+    album = track.album or ''
+    
+    subtitle = artist
+    if album:
+        subtitle = f"{artist} • {album}"
+    
+    metadata = AudioItemMetadata(
+        title=title,
+        subtitle=subtitle,
+        art=display.Image(
+            content_description=title,
+            sources=[
+                display.ImageInstance(url=art_url)
+            ]
+        ),
+        background_image=display.Image(
+            content_description=title,
+            sources=[
+                display.ImageInstance(url=background_url)
+            ]
+        )
+    )
+    
+    return metadata
+
+
+def enqueue_songs(connection, media_queue: MediaQueue, song_id_list: list, source: str = 'plex') -> None:
+    """Helper to enqueue songs into MediaQueue
+    
+    :param connection: A PlexConnection or SubsonicConnection object
+    :param MediaQueue media_queue: A MediaQueue object
+    :param list song_id_list: A list of song IDs to enqueue (can be IDs or (id, source) tuples)
+    :param str source: Default source if song_id_list contains plain IDs
+    :return: None
+    """
+    
+    for item in song_id_list:
+        # Handle both plain IDs and (id, source) tuples
+        if isinstance(item, tuple):
+            song_id, song_source = item
+        else:
+            song_id = item
+            song_source = source
+        
+        song_details = connection.get_song_details(song_id, song_source) if hasattr(connection, 'get_song_details') else connection.get_song_details(song_id)
+        song_uri = connection.get_song_uri(song_id, song_source) if hasattr(connection, 'get_song_uri') else connection.get_song_uri(song_id)
+        
+        song_data = song_details.get('song', {})
+        
+        # Create track object from song details
+        new_track = Track(
+            id=song_data.get('id'),
+            title=song_data.get('title'),
+            artist=song_data.get('artist'),
+            artist_id=song_data.get('artistId'),
+            album=song_data.get('album'),
+            album_id=song_data.get('albumId'),
+            track_no=song_data.get('track'),
+            year=song_data.get('year'),
+            genre=song_data.get('genre', ''),
+            duration=song_data.get('duration'),
+            bitrate=song_data.get('bitRate'),
+            uri=song_uri,
+            offset=0,
+            previous_id=None,
+            source=song_source,
+            cover_art_url=song_data.get('coverPosterUrl', ''),
+            background_url=song_data.get('backgroundUrl', '')
+        )
+        
+        media_queue.add_track(new_track)
+
 
 class Controller:
     """
@@ -98,6 +195,68 @@ class Controller:
 
         self.handler_input = handler_input
         """handler_input"""
+        
+        self.media_queue = MediaQueue()
+        """MediaQueue for runtime operations"""
+        
+        # Initialize media connections
+        plex_conn = None
+        navidrome_conn = None
+        
+        try:
+            # Try to initialize Plex connection
+            if config.PMS_SERVER_URL and config.PMS_SERVER_TOKEN:
+                plex_conn = PlexConnection(
+                    server_url=config.PMS_SERVER_URL,
+                    token=config.PMS_SERVER_TOKEN
+                )
+                self.logger.debug('Plex connection initialized')
+        except Exception as e:
+            self.logger.warning(f'Failed to initialize Plex connection: {e}')
+        
+        try:
+            # Try to initialize Navidrome connection if enabled
+            if hasattr(config, 'NAVIDROME_URL') and hasattr(config, 'NAVIDROME_USER'):
+                if config.NAVIDROME_URL and config.NAVIDROME_USER:
+                    navidrome_conn = SubsonicConnection(
+                        server_url=config.NAVIDROME_URL,
+                        user=config.NAVIDROME_USER,
+                        passwd=getattr(config, 'NAVIDROME_PASSWORD', ''),
+                        port=getattr(config, 'NAVIDROME_PORT', 4533),
+                        api_location=getattr(config, 'NAVIDROME_API_LOCATION', '/rest'),
+                        api_version=getattr(config, 'NAVIDROME_API_VERSION', '1.16.1')
+                    )
+                    self.logger.debug('Navidrome connection initialized')
+        except Exception as e:
+            self.logger.warning(f'Failed to initialize Navidrome connection: {e}')
+        
+        # Initialize MediaService
+        self.media_service = MediaService(
+            navidrome_conn=navidrome_conn,
+            plex_conn=plex_conn,
+            prefer_high_bitrate=getattr(config, 'PREFER_HIGH_BITRATE', False)
+        )
+        self.logger.debug('MediaService initialized')
+
+
+    def _dict_to_track(self, track_dict: Dict) -> Track:
+        """Convert DynamoDB track dict to Track object
+        
+        Args:
+            track_dict (Dict): Track dictionary from DynamoDB
+        Returns:
+            Track: Track object
+        """
+        return Track(
+            id=track_dict.get('id', ''),
+            title=track_dict.get('title', ''),
+            artist=track_dict.get('artist', ''),
+            album=track_dict.get('album', ''),
+            uri=track_dict.get('uri', ''),
+            offset=0,
+            cover_art_url=track_dict.get('album_art', ''),
+            background_url=track_dict.get('artist_art', '')
+        )
 
 
 #
@@ -264,11 +423,11 @@ class Controller:
 #
 # Playback control
 #
-    def track_to_audio_item(self, track: Dict, offset: int, previous_token: str) -> AudioItem:
+    def track_to_audio_item(self, track: Track, offset: int, previous_token: str) -> AudioItem:
         """
-        Converts a track (Dict) to an AudioItem object.
+        Converts a Track object to an AudioItem object.
         Args:
-            track (Dict): A dictionary containing track information with keys "title", "artist", "album", "album_art", "artist_art", "id", and "uri".
+            track (Track): A Track object containing track information
             offset (int): The offset in milliseconds for the audio stream.
             previous_token (str): The expected previous token for the audio stream.
         Returns:
@@ -277,30 +436,9 @@ class Controller:
 
         self.logger.debug('In track_to_audio_item()')
 
-        metadata = AudioItemMetadata(
-            title = track["title"],
-            subtitle = track["artist"]
-        )        
-        if track["album_art"] is not None:
-            metadata.art=display.Image(
-                content_description = track["album"],
-                sources=[
-                    display.ImageInstance(
-                        url=track["album_art"]
-                    )
-                ]
-            )
-        if track["artist_art"] is not None:
-            metadata.background_image=display.Image(
-                content_description = track["artist"],
-                sources = [
-                    display.ImageInstance(
-                        url = track["artist_art"]
-                    )
-                ]
-            )
+        metadata = build_metadata_from_track(track)
 
-        stream = Stream(token=track["id"], url=track["uri"], offset_in_milliseconds=offset, expected_previous_token=previous_token)
+        stream = Stream(token=track.id, url=track.uri, offset_in_milliseconds=offset, expected_previous_token=previous_token)
         return AudioItem(stream=stream, metadata=metadata)
 
 
@@ -317,10 +455,18 @@ class Controller:
         persistence_attr = self.handler_input.attributes_manager.persistent_attributes
         playback_info = persistence_attr.get("playback_info")
 
-        current_track = self.get_current_track()
+        # Get current track from MediaQueue
+        current_track = self.media_queue.get_current_track()
+        
+        # If MediaQueue is empty, try to load from DynamoDB (backwards compatibility)
+        if not current_track.id:
+            db_track = self.get_current_track()
+            if db_track:
+                # Convert DynamoDB dict to Track object
+                current_track = self._dict_to_track(db_track)
+                self.media_queue.current_track = current_track
 
         playback_info['next_stream_enqueued'] = False
-
 
         directive = PlayDirective(play_behavior=PlayBehavior.REPLACE_ALL, audio_item=self.track_to_audio_item(current_track, int(playback_info["offset_in_ms"]), None))
         self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
@@ -368,11 +514,16 @@ class Controller:
 
         self.logger.debug('In previous_playback()')
 
-        prevous_track = self.get_prevous_track()
-        if prevous_track == None:
-            return self.handler_input.response_builder.response
+        # Try MediaQueue first
+        previous_track = self.media_queue.get_previous_track()
+        if not previous_track.id:
+            # Fall back to DynamoDB
+            db_track = self.get_prevous_track()
+            if not db_track:
+                return self.handler_input.response_builder.response
+            previous_track = self._dict_to_track(db_track)
 
-        directive = PlayDirective(play_behavior=PlayBehavior.REPLACE_ALL, audio_item=self.track_to_audio_item(prevous_track, 0, None))
+        directive = PlayDirective(play_behavior=PlayBehavior.REPLACE_ALL, audio_item=self.track_to_audio_item(previous_track, 0, None))
         self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
 
         return self.handler_input.response_builder.response
@@ -388,11 +539,16 @@ class Controller:
 
         self.logger.debug('In next_playback()')
 
-        next_track = self.get_next_track(True)
-        if next_track == None:
-            return self.handler_input.response_builder.response
-
-        self.logger.debug(f'next_track: {next_track["title"]} by {next_track["artist"]}')
+        # Try MediaQueue first
+        next_track = self.media_queue.get_next_track()
+        if not next_track.id:
+            # Fall back to DynamoDB
+            db_track = self.get_next_track(True)
+            if not db_track:
+                return self.handler_input.response_builder.response
+            next_track = self._dict_to_track(db_track)
+        
+        self.logger.debug(f'next_track: {next_track.title} by {next_track.artist}')
 
         directive = PlayDirective(play_behavior=PlayBehavior.REPLACE_ALL, audio_item=self.track_to_audio_item(next_track, 0, None))
         self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
@@ -429,7 +585,32 @@ class Controller:
 
         self.logger.debug('In shuffle_playback()')
 
+        # Shuffle MediaQueue if it's being used
+        if len(self.media_queue.get_current_queue()) > 0:
+            if enable:
+                self.media_queue.shuffle()
+        
+        # Also shuffle DynamoDB playlist for backwards compatibility
         self.shuffle_play_order(enable)
+
+        return self.handler_input.response_builder.response
+
+
+    def repeat_playback(self, enable: bool) -> Response:
+        """
+        Toggles repeat one mode.
+        Args:
+            enable (bool): If True, enables repeat one mode. If False, disables it.
+        Returns:
+            Response: The response object with no output speech.
+        """
+
+        self.logger.debug('In repeat_playback()')
+        
+        if enable:
+            self.media_queue.set_playback_mode(MediaQueue.MODE_REPEAT_ONE)
+        else:
+            self.media_queue.set_playback_mode(MediaQueue.MODE_NORMAL)
 
         return self.handler_input.response_builder.response
 
@@ -446,14 +627,19 @@ class Controller:
         # get localization data
         data = self.handler_input.attributes_manager.request_attributes["_"]
 
-        # Get the current track
-        current_track = self.get_current_track()
+        # Get the current track from MediaQueue or DynamoDB
+        current_track = self.media_queue.get_current_track()
+        if not current_track.id:
+            db_track = self.get_current_track()
+            if not db_track:
+                return self.handler_input.response_builder.response
+            current_track = self._dict_to_track(db_track)
 
         # Ignore the request if there is no track
-        if current_track == None:
+        if not current_track.id:
             return self.handler_input.response_builder.response
 
-        speak_output = data[prompts.SKILL_SONG_DETAILS].format(song=current_track["title"], artist=current_track["artist"])
+        speak_output = data[prompts.SKILL_SONG_DETAILS].format(song=current_track.title, artist=current_track.artist)
         self.logger.info(speak_output)
 
         self.handler_input.response_builder.speak(speak_output).set_should_end_session(True)
@@ -513,15 +699,25 @@ class Controller:
         if playback_info.get("next_stream_enqueued"):
             return self.handler_input.response_builder.response
 
-        next_track = self.get_next_track(False)
-        if next_track == None:
-            return self.handler_input.response_builder.response
+        # Try to get next track from MediaQueue buffer
+        next_track = self.media_queue.enqueue_next_track()
+        if not next_track.id:
+            # Fall back to DynamoDB
+            db_track = self.get_next_track(False)
+            if not db_track:
+                return self.handler_input.response_builder.response
+            next_track = self._dict_to_track(db_track)
 
-        current_track = self.get_current_track()
+        current_track = self.media_queue.get_current_track()
+        if not current_track.id:
+            db_track = self.get_current_track()
+            if db_track:
+                current_track = self._dict_to_track(db_track)
+        
         playback_info["next_stream_enqueued"] = True
-        self.logger.info(f'Queuing next track: {next_track["title"]} by {next_track["artist"]}')
+        self.logger.info(f'Queuing next track: {next_track.title} by {next_track.artist}')
 
-        directive = PlayDirective(play_behavior=PlayBehavior.ENQUEUE, audio_item=self.track_to_audio_item(next_track, 0, current_track["id"]))
+        directive = PlayDirective(play_behavior=PlayBehavior.ENQUEUE, audio_item=self.track_to_audio_item(next_track, 0, current_track.id))
         self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
 
         return self.handler_input.response_builder.response
@@ -541,16 +737,20 @@ class Controller:
         persistence_attr = self.handler_input.attributes_manager.persistent_attributes
         playback_info = persistence_attr.get("playback_info")
 
-        # get next track just to update the index
-        next_track = self.get_next_track(True)
-        if next_track == None:
-            return self.handler_input.response_builder.response
+        # Try MediaQueue first
+        next_track = self.media_queue.get_next_track()
+        if not next_track.id:
+            # get next track from DynamoDB just to update the index
+            db_track = self.get_next_track(True)
+            if not db_track:
+                return self.handler_input.response_builder.response
+            next_track = self._dict_to_track(db_track)
 
         playback_info["in_playback_session"] = False
         playback_info["next_stream_enqueued"] = False
         playback_info["offset_in_ms"] = 0
 
-        self.logger.info(f'Next track: {next_track["title"]} by {next_track["artist"]} updated')
+        self.logger.info(f'Next track: {next_track.title} by {next_track.artist} updated')
         return self.handler_input.response_builder.response
 
 
@@ -564,8 +764,16 @@ class Controller:
         """
 
         self.logger.debug('In playback_failed()')
-        persistence_attr = self.handler_input.attributes_manager.persistent_attributes
-
+        
+        # Use MediaQueue's skip method if available
+        if len(self.media_queue.get_current_queue()) > 0:
+            next_track = self.media_queue.skip_current_track()
+            if next_track.id:
+                directive = PlayDirective(play_behavior=PlayBehavior.REPLACE_ALL, audio_item=self.track_to_audio_item(next_track, 0, None))
+                self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                return self.handler_input.response_builder.response
+        
+        # Fall back to DynamoDB next_playback
         return self.next_playback()
 
 #
@@ -673,7 +881,38 @@ class Controller:
         # get localization data
         data = self.handler_input.attributes_manager.request_attributes["_"]
 
-        # Get the music section
+        # Try using MediaService first
+        try:
+            song_list = self.media_service.build_random_song_list(config.PMS_DEFAULT_MAX_RESULTS)
+            if song_list:
+                # Clear both queues
+                self.clear_playlist()
+                self.media_queue.clear()
+                
+                # Enqueue songs from MediaService
+                connection = self.media_service.get_default_connection()
+                enqueue_songs(connection, self.media_queue, song_list)
+                
+                playlist_name = data[prompts.PMS_PLNAME_RANDOM_MUSIC]
+                self.set_playlist_name(playlist_name)
+                speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+                
+                # Get first track and start playback
+                first_track = self.media_queue.get_next_track()
+                if first_track.id:
+                    self.handler_input.response_builder.speak(speak_output)
+                    self.logger.info(speak_output)
+                    
+                    directive = PlayDirective(
+                        play_behavior=PlayBehavior.REPLACE_ALL,
+                        audio_item=self.track_to_audio_item(first_track, 0, None)
+                    )
+                    self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                    return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to original Plex implementation
         response = self.load_music_section()
         if response is not None:
             return response
@@ -728,7 +967,48 @@ class Controller:
             self.logger.error(speak_output)
             return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
 
-        # Get the music section
+        # Try using MediaService first
+        try:
+            artist_results = self.media_service.search_artist(artist.value)
+            if artist_results and len(artist_results) > 0:
+                artist_data = artist_results[0]
+                artist_id = artist_data.get('id')
+                source = artist_data.get('source', 'plex')
+                
+                # Get albums by artist
+                albums = self.media_service.albums_by_artist(artist_id, source)
+                if albums:
+                    # Build song list from albums
+                    song_list = self.media_service.build_song_list_from_albums(albums, config.PMS_DEFAULT_MAX_RESULTS, source)
+                    if song_list:
+                        # Clear both queues
+                        self.clear_playlist()
+                        self.media_queue.clear()
+                        
+                        # Enqueue songs
+                        connection = self.media_service.get_connection_for_source(source)
+                        enqueue_songs(connection, self.media_queue, song_list, source)
+                        
+                        playlist_name = data[prompts.PMS_PLNAME_MUSIC_BY_ARTIST].format(artist.value)
+                        self.set_playlist_name(playlist_name)
+                        speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+                        
+                        # Get first track and start playback
+                        first_track = self.media_queue.get_next_track()
+                        if first_track.id:
+                            self.handler_input.response_builder.speak(speak_output)
+                            self.logger.info(speak_output)
+                            
+                            directive = PlayDirective(
+                                play_behavior=PlayBehavior.REPLACE_ALL,
+                                audio_item=self.track_to_audio_item(first_track, 0, None)
+                            )
+                            self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                            return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to original Plex implementation
         response = self.load_music_section()
         if response is not None:
             return response
@@ -791,7 +1071,50 @@ class Controller:
             self.logger.error(speak_output)
             return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
 
-        # Get the music section
+        # Try using MediaService first
+        try:
+            song_results = self.media_service.search_song(song.value)
+            if song_results and len(song_results) > 0:
+                # Filter by artist name (fuzzy match)
+                matching_song = None
+                for song_data in song_results:
+                    song_artist = song_data.get('artist', '').lower()
+                    if artist.value.lower() in song_artist or song_artist in artist.value.lower():
+                        matching_song = song_data
+                        break
+                
+                if matching_song:
+                    source = matching_song.get('source', 'plex')
+                    song_id = matching_song.get('id')
+                    
+                    # Clear both queues
+                    self.clear_playlist()
+                    self.media_queue.clear()
+                    
+                    # Enqueue the song
+                    connection = self.media_service.get_connection_for_source(source)
+                    enqueue_songs(connection, self.media_queue, [song_id], source)
+                    
+                    playlist_name = data[prompts.PMS_PLNAME_SONG].format(song=song.value, artist=artist.value)
+                    self.set_playlist_name(playlist_name)
+                    speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+                    
+                    # Get first track and start playback
+                    first_track = self.media_queue.get_next_track()
+                    if first_track.id:
+                        self.handler_input.response_builder.speak(speak_output)
+                        self.logger.info(speak_output)
+                        
+                        directive = PlayDirective(
+                            play_behavior=PlayBehavior.REPLACE_ALL,
+                            audio_item=self.track_to_audio_item(first_track, 0, None)
+                        )
+                        self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                        return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to original Plex implementation
         response = self.load_music_section()
         if response is not None:
             return response
@@ -857,7 +1180,57 @@ class Controller:
             self.logger.error(speak_output)
             return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
 
-        # Get the music section
+        # Try using MediaService first
+        try:
+            album_results = self.media_service.search_album(album.value)
+            if album_results and len(album_results) > 0:
+                # Filter by artist name (fuzzy match)
+                matching_album = None
+                for album_data in album_results:
+                    album_artist = album_data.get('artist', '').lower()
+                    if artist.value.lower() in album_artist or album_artist in artist.value.lower():
+                        matching_album = album_data
+                        break
+                
+                if matching_album:
+                    source = matching_album.get('source', 'plex')
+                    album_id = matching_album.get('id')
+                    
+                    # Build song list from album
+                    connection = self.media_service.get_connection_for_source(source)
+                    if hasattr(connection, 'build_song_list_from_albums'):
+                        song_list = connection.build_song_list_from_albums([album_id], config.PMS_DEFAULT_MAX_RESULTS)
+                    else:
+                        song_list = []
+                    
+                    if song_list:
+                        # Clear both queues
+                        self.clear_playlist()
+                        self.media_queue.clear()
+                        
+                        # Enqueue songs
+                        enqueue_songs(connection, self.media_queue, song_list, source)
+                        
+                        playlist_name = data[prompts.PMS_PLNAME_ALBUM].format(album=album.value, artist=artist.value)
+                        self.set_playlist_name(playlist_name)
+                        speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+                        
+                        # Get first track and start playback
+                        first_track = self.media_queue.get_next_track()
+                        if first_track.id:
+                            self.handler_input.response_builder.speak(speak_output)
+                            self.logger.info(speak_output)
+                            
+                            directive = PlayDirective(
+                                play_behavior=PlayBehavior.REPLACE_ALL,
+                                audio_item=self.track_to_audio_item(first_track, 0, None)
+                            )
+                            self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                            return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to original Plex implementation
         response = self.load_music_section()
         if response is not None:
             return response
@@ -922,7 +1295,38 @@ class Controller:
             self.logger.error(speak_output)
             return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
 
-        # Get the music section
+        # Try using MediaService first
+        try:
+            song_list = self.media_service.build_song_list_from_genre(genre.value, config.PMS_DEFAULT_MAX_RESULTS)
+            if song_list:
+                # Clear both queues
+                self.clear_playlist()
+                self.media_queue.clear()
+                
+                # Enqueue songs from MediaService
+                connection = self.media_service.get_default_connection()
+                enqueue_songs(connection, self.media_queue, song_list)
+                
+                playlist_name = data[prompts.PMS_PLNAME_MUSIC_BY_GENRE].format(genre.value)
+                self.set_playlist_name(playlist_name)
+                speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+                
+                # Get first track and start playback
+                first_track = self.media_queue.get_next_track()
+                if first_track.id:
+                    self.handler_input.response_builder.speak(speak_output)
+                    self.logger.info(speak_output)
+                    
+                    directive = PlayDirective(
+                        play_behavior=PlayBehavior.REPLACE_ALL,
+                        audio_item=self.track_to_audio_item(first_track, 0, None)
+                    )
+                    self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                    return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to original Plex implementation
         response = self.load_music_section()
         if response is not None:
             return response
@@ -975,7 +1379,43 @@ class Controller:
             self.logger.error(speak_output)
             return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
 
-        # Get the music section
+        # Try using MediaService first
+        try:
+            playlist_result = self.media_service.search_playlist(playlist.value)
+            if playlist_result:
+                playlist_id, source = playlist_result
+                
+                # Build song list from playlist
+                song_list = self.media_service.build_song_list_from_playlist(playlist_id, source)
+                if song_list:
+                    # Clear both queues
+                    self.clear_playlist()
+                    self.media_queue.clear()
+                    
+                    # Enqueue songs
+                    connection = self.media_service.get_connection_for_source(source)
+                    enqueue_songs(connection, self.media_queue, song_list, source)
+                    
+                    playlist_name = data[prompts.PMS_PLNAME_PLAYLIST].format(playlist.value)
+                    self.set_playlist_name(playlist_name)
+                    speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+                    
+                    # Get first track and start playback
+                    first_track = self.media_queue.get_next_track()
+                    if first_track.id:
+                        self.handler_input.response_builder.speak(speak_output)
+                        self.logger.info(speak_output)
+                        
+                        directive = PlayDirective(
+                            play_behavior=PlayBehavior.REPLACE_ALL,
+                            audio_item=self.track_to_audio_item(first_track, 0, None)
+                        )
+                        self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                        return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to original Plex implementation
         response = self.load_music_section()
         if response is not None:
             return response
@@ -1002,3 +1442,305 @@ class Controller:
         self.handler_input.response_builder.speak(speak_output)
         self.logger.info(speak_output)
         return self.start_playback()
+
+    def shuffle_playlist(self) -> Response:
+        """
+        Shuffle and play a playlist by name. Uses MediaService when available,
+        falls back to Plex implementation otherwise.
+        """
+        self.logger.debug('In shuffle_playlist()')
+
+        # get localization data
+        data = self.handler_input.attributes_manager.request_attributes["_"]
+
+        # Get playlist slot
+        playlist = get_slot_value_v2(self.handler_input, 'playlist')
+        if playlist is None:
+            speak_output = data[prompts.SKILL_INTENT_SLOTS_MISSING]
+            self.logger.error(speak_output)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        # Try MediaService first
+        try:
+            playlist_result = self.media_service.search_playlist(playlist.value)
+            if playlist_result:
+                playlist_id, source = playlist_result
+                song_list = self.media_service.build_song_list_from_playlist(playlist_id, source)
+                if not song_list or len(song_list) == 0:
+                    speak_output = sanitise_speech_output(f"The playlist {playlist.value} appears to be empty.")
+                    self.logger.error(speak_output)
+                    return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+                # Shuffle the song list
+                random.shuffle(song_list)
+
+                # Clear both queues
+                self.clear_playlist()
+                self.media_queue.clear()
+
+                # Enqueue songs using MediaService connection
+                connection = self.media_service.get_connection_for_source(source)
+                enqueue_songs(connection, self.media_queue, song_list, source)
+
+                playlist_name = data[prompts.PMS_PLNAME_PLAYLIST].format(playlist.value)
+                self.set_playlist_name(playlist_name)
+                speak_output = sanitise_speech_output(f"Shuffling and playing playlist {playlist.value}")
+
+                # Get first track and start playback
+                first_track = self.media_queue.get_next_track()
+                if first_track.id:
+                    self.handler_input.response_builder.speak(speak_output)
+                    self.logger.info(speak_output)
+                    directive = PlayDirective(
+                        play_behavior=PlayBehavior.REPLACE_ALL,
+                        audio_item=self.track_to_audio_item(first_track, 0, None)
+                    )
+                    self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                    return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to Plex implementation
+        response = self.load_music_section()
+        if response is not None:
+            return response
+
+        # Search playlist via Plex
+        try:
+            plex_track_list = self.section.playlist(title=playlist.value)
+        except NotFound as exception:
+            speak_output = data[prompts.PMS_PLAYLIST_SEARCH_EMPTY].format(playlist.value)
+            self.logger.error(exception)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+        except Exception as exception:
+            speak_output = data[prompts.PMS_PLAYLIST_SEARCH_ERROR].format(playlist.value)
+            self.logger.error(exception)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        if not plex_track_list or len(plex_track_list) == 0:
+            speak_output = sanitise_speech_output(f"The playlist {playlist.value} appears to be empty.")
+            self.logger.error(speak_output)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        # Shuffle plex tracks
+        random.shuffle(plex_track_list)
+
+        # Clear queues and add shuffled tracks
+        self.clear_playlist()
+        self.add_plex_tracks(plex_track_list)
+
+        playlist_name = data[prompts.PMS_PLNAME_PLAYLIST].format(playlist.value)
+        self.set_playlist_name(playlist_name)
+        speak_output = sanitise_speech_output(f"Shuffling and playing playlist {playlist.value}")
+
+        self.handler_input.response_builder.speak(speak_output)
+        self.logger.info(speak_output)
+        return self.start_playback()
+
+    def play_song (self) -> Response:
+        """
+        Play a song by title across available sources.
+        Searches for the song using MediaService first, falls back to Plex if needed.
+        Clears the current playlist, enqueues found tracks and starts playback.
+        """
+
+        self.logger.debug('In play_song()')
+
+        # get localization data
+        data = self.handler_input.attributes_manager.request_attributes["_"]
+
+        # Get variable(s) from intent
+        song = get_slot_value_v2(self.handler_input, 'song')
+        if song is None:
+            speak_output = data[prompts.SKILL_INTENT_SLOTS_MISSING]
+            self.logger.error(speak_output)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        # Try using MediaService first
+        try:
+            song_results = self.media_service.search_song(song.value)
+            if song_results and len(song_results) > 0:
+                # Use the best match (first result)
+                best_match = song_results[0]
+                source = best_match.get('source', 'plex')
+
+                # Build list of song IDs (limit by config)
+                max_results = min(len(song_results), config.PMS_DEFAULT_MAX_RESULTS)
+                song_id_list = [s.get('id') for s in song_results[:max_results]]
+
+                # Clear both queues
+                self.clear_playlist()
+                self.media_queue.clear()
+
+                # Enqueue songs from selected source
+                connection = self.media_service.get_connection_for_source(source)
+                enqueue_songs(connection, self.media_queue, song_id_list, source)
+
+                # Build playlist name and speak
+                artist_name = best_match.get('artist', '')
+                playlist_name = data[prompts.PMS_PLNAME_SONG].format(song=song.value, artist=artist_name)
+                self.set_playlist_name(playlist_name)
+                speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+
+                # Get first track and start playback
+                first_track = self.media_queue.get_next_track()
+                if first_track.id:
+                    self.handler_input.response_builder.speak(speak_output)
+                    self.logger.info(speak_output)
+
+                    directive = PlayDirective(
+                        play_behavior=PlayBehavior.REPLACE_ALL,
+                        audio_item=self.track_to_audio_item(first_track, 0, None)
+                    )
+                    self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                    return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.warning(f'MediaService failed, falling back to Plex: {e}')
+
+        # Fall back to original Plex implementation
+        response = self.load_music_section()
+        if response is not None:
+            return response
+
+        # Search for the song on Plex
+        try:
+            plex_track_list = self.section.searchTracks(title=song.value)
+        except Exception as exception:
+            speak_output = data[prompts.PMS_SONG_SEARCH_ERROR].format(song=song.value, artist='')
+            self.logger.error(exception)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        if not plex_track_list or len(plex_track_list) == 0:
+            speak_output = data[prompts.PMS_SONG_SEARCH_EMPTY].format(song=song.value)
+            self.logger.error(speak_output)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        # Enqueue Plex results
+        self.clear_playlist()
+        self.add_plex_tracks(plex_track_list)
+
+        # Build playlist name using first track's artist if possible
+        try:
+            artist_name = plex_track_list[0].grandparentTitle if hasattr(plex_track_list[0], 'grandparentTitle') else ''
+        except Exception:
+            artist_name = ''
+
+        playlist_name = data[prompts.PMS_PLNAME_SONG].format(song=song.value, artist=artist_name)
+        self.set_playlist_name(playlist_name)
+        speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+
+        self.handler_input.response_builder.speak(speak_output)
+        self.logger.info(speak_output)
+        return self.start_playback()
+
+
+    def play_song_from_album (self) -> Response:
+        """
+        Play a specific song from a specific album.
+        This method searches for a song within a specific album across all sources.
+        Returns:
+            Response: The response object containing the result of the playback action.
+        """
+
+        self.logger.debug('In play_song_from_album()')
+
+        # get localization data
+        data = self.handler_input.attributes_manager.request_attributes["_"]
+
+        # Get variable(s) from intent
+        song = get_slot_value_v2(self.handler_input, 'song')
+        album = get_slot_value_v2(self.handler_input, 'album')
+        if song is None or album is None:
+            speak_output = data[prompts.SKILL_INTENT_SLOTS_MISSING]
+            self.logger.error(speak_output)
+            return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+        # Try using MediaService
+        try:
+            song_results = self.media_service.search_song_from_album(song.value, album.value)
+            if song_results and len(song_results) > 0:
+                # Take the first match
+                matching_song = song_results[0]
+                source = matching_song.get('source', 'plex')
+                song_id = matching_song.get('id')
+                
+                # Clear both queues
+                self.clear_playlist()
+                self.media_queue.clear()
+                
+                # Enqueue the song
+                connection = self.media_service.get_connection_for_source(source)
+                enqueue_songs(connection, self.media_queue, [song_id], source)
+                
+                playlist_name = f"{song.value} from {album.value}"
+                self.set_playlist_name(playlist_name)
+                speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+                
+                # Get first track and start playback
+                first_track = self.media_queue.get_next_track()
+                if first_track.id:
+                    self.handler_input.response_builder.speak(speak_output)
+                    self.logger.info(speak_output)
+                    
+                    directive = PlayDirective(
+                        play_behavior=PlayBehavior.REPLACE_ALL,
+                        audio_item=self.track_to_audio_item(first_track, 0, None)
+                    )
+                    self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                    return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.error(f'Failed to play song from album: {e}')
+        
+        # If MediaService failed, return error
+        speak_output = f"Sorry, I couldn't find {song.value} from {album.value}"
+        self.logger.error(speak_output)
+        return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
+
+
+    def play_favourite_songs (self) -> Response:
+        """
+        Play starred/favorite songs from all sources.
+        Returns:
+            Response: The response object containing the result of the playback action.
+        """
+
+        self.logger.debug('In play_favourite_songs()')
+
+        # get localization data
+        data = self.handler_input.attributes_manager.request_attributes["_"]
+
+        # Try using MediaService
+        try:
+            song_list = self.media_service.build_song_list_from_favourites()
+            if song_list:
+                # Clear both queues
+                self.clear_playlist()
+                self.media_queue.clear()
+                
+                # Enqueue songs from MediaService
+                connection = self.media_service.get_default_connection()
+                enqueue_songs(connection, self.media_queue, song_list)
+                
+                playlist_name = "Favorite Songs"
+                self.set_playlist_name(playlist_name)
+                speak_output = data[prompts.PMS_PLAYING].format(playlist_name)
+                
+                # Get first track and start playback
+                first_track = self.media_queue.get_next_track()
+                if first_track.id:
+                    self.handler_input.response_builder.speak(speak_output)
+                    self.logger.info(speak_output)
+                    
+                    directive = PlayDirective(
+                        play_behavior=PlayBehavior.REPLACE_ALL,
+                        audio_item=self.track_to_audio_item(first_track, 0, None)
+                    )
+                    self.handler_input.response_builder.add_directive(directive).set_should_end_session(True)
+                    return self.handler_input.response_builder.response
+        except Exception as e:
+            self.logger.error(f'Failed to play favourite songs: {e}')
+        
+        # If MediaService failed, return error
+        speak_output = "Sorry, I couldn't find any favorite songs"
+        self.logger.error(speak_output)
+        return self.handler_input.response_builder.speak(speak_output).ask(speak_output).response
