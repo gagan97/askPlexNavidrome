@@ -1,7 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
-      "invocationName": "gags sonic",
+      "invocationName": "gags butler",
       "intents": [
         {
           "name": "AMAZON.CancelIntent",
