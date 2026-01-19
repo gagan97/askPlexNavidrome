@@ -702,6 +702,126 @@ class PlayPlaylistHandler(AbstractRequestHandler):
         return player_controller.play_playlist()
 
 
+class PlaySongFromAlbumHandler(AbstractRequestHandler):
+    """
+    Handler for the 'PlaySongFromAlbum' intent.
+    Returns:
+        Response: The response object containing the result of the playback action.
+    """
+
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return is_intent_name('PlaySongFromAlbum')(handler_input)
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        logger.debug('In PlaySongFromAlbumHandler()')
+        player_controller = controller.Controller(logger, handler_input)
+        return player_controller.play_song_from_album()
+
+
+class PlayFavouriteSongsHandler(AbstractRequestHandler):
+    """
+    Handler for the 'PlayFavouriteSongs' intent.
+    Returns:
+        Response: The response object containing the result of the playback action.
+    """
+
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return is_intent_name('PlayFavouriteSongs')(handler_input)
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        logger.debug('In PlayFavouriteSongsHandler()')
+        player_controller = controller.Controller(logger, handler_input)
+        return player_controller.play_favourite_songs()
+
+
+class RepeatOnHandler(AbstractRequestHandler):
+    """
+    Handler for the 'AMAZON.RepeatOnIntent' intent.
+    Returns:
+        Response: The response object with no output speech.
+    """
+
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return is_intent_name('AMAZON.RepeatOnIntent')(handler_input)
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        logger.debug('In RepeatOnHandler()')
+        persistence_attr = handler_input.attributes_manager.persistent_attributes
+        playback_info = persistence_attr.get("playback_info")
+
+        if playback_info.get("in_playback_session"):
+            player_controller = controller.Controller(logger, handler_input)
+            return player_controller.repeat_playback(True)
+
+        return handler_input.response_builder.response
+
+
+class RepeatOffHandler(AbstractRequestHandler):
+    """
+    Handler for the 'AMAZON.RepeatOffIntent' intent.
+    Returns:
+        Response: The response object with no output speech.
+    """
+
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return is_intent_name('AMAZON.RepeatOffIntent')(handler_input)
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        logger.debug('In RepeatOffHandler()')
+        persistence_attr = handler_input.attributes_manager.persistent_attributes
+        playback_info = persistence_attr.get("playback_info")
+
+        if playback_info.get("in_playback_session"):
+            player_controller = controller.Controller(logger, handler_input)
+            return player_controller.repeat_playback(False)
+
+        return handler_input.response_builder.response
+
+
+class FallbackIntentHandler(AbstractRequestHandler):
+    """
+    Handler for the 'AMAZON.FallbackIntent' intent.
+    Returns:
+        Response: The response object with "Ready!" message.
+    """
+
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return is_intent_name('AMAZON.FallbackIntent')(handler_input)
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        logger.debug('In FallbackIntentHandler()')
+        speak_output = "Ready!"
+        handler_input.response_builder.speak(speak_output).ask(speak_output)
+        return handler_input.response_builder.response
+
+
+class SkillEventHandler(AbstractRequestHandler):
+    """
+    Handler for skill events (SkillEnabled, SkillDisabled).
+    Returns:
+        Response: The response object with no output speech.
+    """
+
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return handler_input.request_envelope.request.object_type.startswith('AlexaSkillEvent')
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        logger.debug('In SkillEventHandler()')
+        return handler_input.response_builder.response
+
+
 #
 # Exception Handers
 #
@@ -873,6 +993,12 @@ sb.add_request_handler(PlayAlbumByArtistHandler())
 sb.add_request_handler(PlaySongByArtistHandler())
 sb.add_request_handler(PlayMusicByGenreHandler())
 sb.add_request_handler(PlayPlaylistHandler())
+sb.add_request_handler(PlaySongFromAlbumHandler())
+sb.add_request_handler(PlayFavouriteSongsHandler())
+sb.add_request_handler(RepeatOnHandler())
+sb.add_request_handler(RepeatOffHandler())
+sb.add_request_handler(FallbackIntentHandler())
+sb.add_request_handler(SkillEventHandler())
 sb.add_exception_handler(CatchAllExceptionHandler())
 # Register Interceptors
 sb.add_global_request_interceptor(LocalizationInterceptor())
